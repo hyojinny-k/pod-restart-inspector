@@ -9,6 +9,7 @@ from __future__ import annotations
 import os
 import ssl
 import subprocess
+import urllib.error
 import urllib.parse
 import urllib.request
 
@@ -25,8 +26,18 @@ def previous_logs(namespace: str, pod: str, container: str, tail: int, timeout: 
         fetch = _from_api if in_cluster() else _from_kubectl
         text = fetch(namespace, pod, container, tail, timeout)
     except (OSError, subprocess.SubprocessError, RuntimeError) as e:
+        if _pod_not_found(e):
+            return "(Pod 가 이미 삭제되어 로그를 볼 수 없음)"
         return f"(로그 조회 실패: {e})"
     return text.rstrip() or "(로그 없음)"
+
+
+def _pod_not_found(e: Exception) -> bool:
+    # kubectl: 'Error from server (NotFound): pods "x" not found' / API: HTTP 404
+    # (이전 컨테이너가 없을 때는 400 BadRequest 라서 구분된다)
+    if isinstance(e, urllib.error.HTTPError):
+        return e.code == 404
+    return "(NotFound)" in str(e)
 
 
 def _from_kubectl(namespace: str, pod: str, container: str, tail: int, timeout: float) -> str:

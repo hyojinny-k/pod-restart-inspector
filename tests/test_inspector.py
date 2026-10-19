@@ -237,3 +237,25 @@ def test_slack_failure_warns_without_leaking_url(fake_prom, monkeypatch, capsys)
 def test_logs_must_be_non_negative():
     with pytest.raises(SystemExit):
         main.parse_args(["--logs", "-1"])
+
+
+def test_reason_query_falls_back_to_window_for_deleted_pods():
+    _, r = prom_api.build_queries("30m", "default", "")
+    metric = 'kube_pod_container_status_last_terminated_reason{namespace="default"}'
+    assert r == f"({metric} == 1) or on (namespace, pod, container) (last_over_time({metric}[30m]) == 1)"
+
+
+def test_previous_logs_deleted_pod_message(monkeypatch):
+    monkeypatch.setattr(logs, "in_cluster", lambda: False)
+    monkeypatch.setattr(
+        logs.subprocess, "run",
+        lambda cmd, **kw: logs.subprocess.CompletedProcess(cmd, 1, "", 'Error from server (NotFound): pods "crasher" not found'),
+    )
+    assert logs.previous_logs("default", "crasher", "crasher", 5) == "(Pod 가 이미 삭제되어 로그를 볼 수 없음)"
+
+    def http_404(*a):
+        raise logs.urllib.error.HTTPError("https://k8s/api", 404, "Not Found", None, None)
+
+    monkeypatch.setattr(logs, "in_cluster", lambda: True)
+    monkeypatch.setattr(logs, "_from_api", http_404)
+    assert logs.previous_logs("default", "crasher", "crasher", 5) == "(Pod 가 이미 삭제되어 로그를 볼 수 없음)"

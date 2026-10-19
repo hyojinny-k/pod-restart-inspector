@@ -30,11 +30,18 @@ def build_queries(window: str, namespace: str | None, exclude_ns: str) -> tuple[
 
     restarts_total 은 Pod 생성 이후 누적 카운터이므로 그대로 쓰면
     '예전에 많이 죽었던' 컨테이너가 상위에 뜬다. increase()로 기간 내 증가량만 본다.
+
+    종료 사유는 현재 값을 우선 쓰고, 값이 없으면(조회 시점에 Pod 가 이미 삭제된 경우)
+    기간 내 마지막 값(last_over_time)으로 채운다. `or on(...)` 은 왼쪽에 없는 컨테이너만 오른쪽에서 가져온다.
     """
     selector = f'namespace="{namespace}"' if namespace else f'namespace!~"{exclude_ns}"'
     restarts_q = (
         "sum by (namespace, pod, container) "
         f"(increase(kube_pod_container_status_restarts_total{{{selector}}}[{window}]))"
     )
-    reason_q = f"kube_pod_container_status_last_terminated_reason{{{selector}}} == 1"
+    reason_metric = f"kube_pod_container_status_last_terminated_reason{{{selector}}}"
+    reason_q = (
+        f"({reason_metric} == 1) or on (namespace, pod, container) "
+        f"(last_over_time({reason_metric}[{window}]) == 1)"
+    )
     return restarts_q, reason_q

@@ -119,11 +119,14 @@ kubectl describe pod crasher | grep -A3 "Last State"
 
 ## Design Notes
 - **누적 카운터 대신 `increase()`**: 오래전에 많이 죽은 Pod가 상위에 뜨는 문제 방지
+- **삭제된 Pod 의 종료 사유**: 재시작 횟수는 기간 내 이력으로 계산되지만 종료 사유를 현재 값으로만 조회하면
+  장애 후 Pod 가 삭제됐을 때 `-` 로 나옴 → `or on(namespace, pod, container) last_over_time(...[window])` 로 기간 내 마지막 사유를 대신 사용
 - `increase()` 는 외삽 때문에 `2.9998` 같은 소수가 나와 반올림 처리 (Python `round()` 는 2.5 → 2 이므로 사사오입 사용)
 - kube-prometheus-stack 이 설치하는 kube-state-metrics(monitoring)는 기존 OpsRamp 수집용 kube-state-metrics(kube-system)와 분리해 기존 관측 구성에 영향을 주지 않도록 함
 
 ## Limitations / Next
-- `--logs` 는 직전 1회 종료 로그만 볼 수 있음 (그 이전 재시작 로그는 kubelet 이 보관하지 않음)
+- `--logs` 는 직전 1회 종료 로그만 볼 수 있음 (그 이전 재시작 로그는 kubelet 이 보관하지 않음). Pod 가 삭제되면 로그도 볼 수 없음
+- 삭제된 Pod 가 기간 내에 종료 사유가 여러 번 바뀐 경우, 대체로 쓰는 사유는 그중 하나만 표시
 - CronJob 이력은 control-plane 노드 한 곳의 hostPath 에 저장 → 여러 노드나 장기 보관이 필요하면 PVC / 외부 저장소로 변경
 - Deployment 처럼 Pod 가 계속 교체되는 경우 재시작이 여러 Pod 이름으로 나뉨 → 워크로드 단위 집계
 
