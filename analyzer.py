@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 
 
@@ -23,8 +24,9 @@ def summarize(restart_rows: list[dict], reason_rows: list[dict], threshold: int)
 
     result = []
     for r in restart_rows:
-        # increase()는 외삽 때문에 2.9998 같은 소수가 나오므로 반올림
-        count = round(float(r["value"][1]))
+        # increase()는 외삽 때문에 2.9998 같은 소수가 나오므로 반올림.
+        # round()는 2.5 -> 2 처럼 짝수 쪽으로 반올림하므로 사사오입(floor(x + 0.5))을 쓴다
+        count = math.floor(float(r["value"][1]) + 0.5)
         if count < threshold:
             continue
         key = _key(r["metric"])

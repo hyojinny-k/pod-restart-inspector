@@ -1,6 +1,9 @@
+import io
 import json
 import sys
 from pathlib import Path
+
+import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -62,3 +65,54 @@ def test_exit_codes(monkeypatch):
 
     monkeypatch.setattr(prom_api, "query", down)
     assert main.main([]) == 2
+
+
+def test_rounding_is_half_up():
+    rows = [{"metric": {"namespace": "d", "pod": "p", "container": "c"}, "value": [0, "2.5"]}]
+    assert summarize(rows, [], threshold=0)[0].restarts == 3  # round(2.5) 는 2
+
+
+class _Resp(io.BytesIO):
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+
+@pytest.mark.parametrize("payload", [b"<html>502 Bad Gateway</html>", b"[]", b'{"status": "success"}'])
+def test_query_bad_response_raises_runtime_error(monkeypatch, payload):
+    monkeypatch.setattr(prom_api.urllib.request, "urlopen", lambda url, timeout: _Resp(payload))
+    with pytest.raises(RuntimeError):
+        prom_api.query("http://prom", "up")
+
+
+def test_non_json_response_exits_2(monkeypatch, capsys):
+    monkeypatch.setattr(prom_api.urllib.request, "urlopen", lambda url, timeout: _Resp(b"not json"))
+    assert main.main([]) == 2
+    assert "[ERROR]" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("value", ["1h", "30m", "1h30m", "500ms", "7d"])
+def test_valid_window(value):
+    assert main.parse_args(["--window", value]).window == value
+
+
+@pytest.mark.parametrize(
+    "args",
+    [
+        ["--window", "1 hour"],
+        ["--window", "1h]"],
+        ["--window", ""],
+        ["--namespace", 'default"} or up{x="'],
+        ["--namespace", "Default"],
+        ["--namespace", "a" * 64],
+        ["--exclude-ns", 'kube-system"'],
+        ["--exclude-ns", "kube-(system"],
+    ],
+)
+def test_invalid_args_exit_2(args, capsys):
+    with pytest.raises(SystemExit) as e:
+        main.parse_args(args)
+    assert e.value.code == 2
+    assert "error" in capsys.readouterr().err

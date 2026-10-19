@@ -16,7 +16,8 @@ OpsRamp로 K8s 클러스터를 관측하면서, 반복적으로 죽는 컨테이
 - `kube_pod_container_status_last_terminated_reason` 결합 → OOMKilled / Error 구분
 - 임계치 필터, 재시작 횟수 내림차순 정렬, `[Summary]` 요약
 - 출력 형식: `table` / `json` / `markdown`
-- 종료 코드: `0` 정상 · `1` 임계치 초과 · `2` 조회 실패 → cron / CI 알림 조건으로 사용 가능
+- 종료 코드: `0` 정상 · `1` 임계치 초과 · `2` 조회 실패 또는 잘못된 인자 → cron / CI 알림 조건으로 사용 가능
+- `--window`, `--namespace`, `--exclude-ns` 입력값 검증 (잘못된 값은 쿼리 전에 에러 메시지로 안내)
 - 시스템 네임스페이스(kube-system, monitoring 등) 기본 제외, `--namespace` / `--exclude-ns` 로 조정
 
 ## Example
@@ -60,14 +61,18 @@ kubectl apply -f examples/crash-pods.yaml   # 20초마다 종료되는 Pod + 메
 # 10~15분 대기
 python3 main.py --window 30m --threshold 2
 kubectl describe pod oom-test | grep -A3 "Last State"
+kubectl describe pod crasher | grep -A3 "Last State"
 ```
+
+> `CrashLoopBackOff` 는 재시작을 기다리는 **대기(Waiting) 상태**이고, 도구가 보여주는 값은
+> 마지막 **종료(Terminated) 사유**입니다. 그래서 비교는 `describe` 의 `Last State` 기준으로 합니다.
 
 | 검증 항목 | 도구 결과 | `kubectl` 실제 상태 | 결과 |
 |---|---|---|---|
 | oom-test 재시작 횟수 | 4 | RESTARTS 4 | ✅ |
 | crasher 재시작 횟수 | 3 | RESTARTS 3 | ✅ |
 | oom-test 종료 사유 | OOMKilled | Last State: Terminated, Reason OOMKilled, Exit Code 137 | ✅ |
-| crasher 종료 사유 | Error | CrashLoopBackOff | ✅ |
+| crasher 종료 사유 | Error | Last State: Terminated, Reason Error, Exit Code 1 (현재 상태는 CrashLoopBackOff) | ✅ |
 | 임계치 초과 시 종료 코드 | `exit=1` | - | ✅ |
 | Prometheus 연결 실패 | `exit=2` + 에러 메시지 | - | ✅ |
 
@@ -76,7 +81,7 @@ kubectl describe pod oom-test | grep -A3 "Last State"
 
 ## Design Notes
 - **누적 카운터 대신 `increase()`**: 오래전에 많이 죽은 Pod가 상위에 뜨는 문제 방지
-- `increase()` 는 외삽 때문에 `2.9998` 같은 소수가 나와 반올림 처리
+- `increase()` 는 외삽 때문에 `2.9998` 같은 소수가 나와 반올림 처리 (Python `round()` 는 2.5 → 2 이므로 사사오입 사용)
 - kube-prometheus-stack 이 설치하는 kube-state-metrics(monitoring)는 기존 OpsRamp 수집용 kube-state-metrics(kube-system)와 분리해 기존 관측 구성에 영향을 주지 않도록 함
 
 ## Limitations / Next

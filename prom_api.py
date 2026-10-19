@@ -11,10 +11,18 @@ def query(prom_url: str, promql: str, timeout: float = 10.0) -> list[dict]:
     """/api/v1/query 로 instant query를 실행하고 result 배열을 반환한다."""
     url = f"{prom_url.rstrip('/')}/api/v1/query?" + urllib.parse.urlencode({"query": promql})
     with urllib.request.urlopen(url, timeout=timeout) as resp:
-        body = json.load(resp)
+        try:
+            body = json.load(resp)
+        except ValueError as e:  # 프록시 에러 페이지 등 JSON 이 아닌 응답
+            raise RuntimeError(f"JSON 이 아닌 응답: {e}") from e
+    if not isinstance(body, dict):
+        body = {"error": f"예상과 다른 응답 형식: {body}"}
     if body.get("status") != "success":
         raise RuntimeError(f"Prometheus error: {body.get('error', body)}")
-    return body["data"]["result"]
+    try:
+        return body["data"]["result"]
+    except (KeyError, TypeError) as e:
+        raise RuntimeError(f"예상과 다른 응답 형식: {body}") from e
 
 
 def build_queries(window: str, namespace: str | None, exclude_ns: str) -> tuple[str, str]:
