@@ -86,6 +86,7 @@ kubectl -n pod-restart-inspector logs job/manual-1
 
 - 종료 코드 `1`(임계치 초과)은 정상 결과이므로 Job 을 실패로 표시하지 않고, `2`(조회 실패)만 실패로 둡니다.
 - 재시도하면 Slack 알림이 중복되므로 `backoffLimit: 0` 입니다.
+- 컨테이너 시간대가 UTC 라서 이력의 `time` 은 `+00:00` 으로 기록됩니다.
 
 ## Test Environment
 | 항목 | 구성 |
@@ -115,6 +116,37 @@ kubectl describe pod crasher | grep -A3 "Last State"
 | crasher 종료 사유 | Error | Last State: Terminated, Reason Error, Exit Code 1 (현재 상태는 CrashLoopBackOff) | ✅ |
 | 임계치 초과 시 종료 코드 | `exit=1` | - | ✅ |
 | Prometheus 연결 실패 | `exit=2` + 에러 메시지 | - | ✅ |
+
+### 추가 기능 검증 (로그 / 이력 / Slack / CronJob)
+같은 클러스터에서 `deploy/cronjob.yaml` 을 배포하고 수동 Job(`create job --from=cronjob/...`)으로 확인했습니다.
+```
+$ kubectl -n pod-restart-inspector logs job/manual-2
+NAMESPACE  POD       CONTAINER  RESTARTS  LAST_REASON
+default    oom-test  app        4         OOMKilled
+default    crasher   crasher    4         Error
+
+[Summary] window=30m, threshold=3
+2 container(s) exceeded restart threshold.
+Highest: default/oom-test/app = 4 (last reason: OOMKilled)
+OOMKilled: 1 container(s) -> memory limit 확인 필요
+
+--- default/oom-test/app (previous logs) ---
+(로그 없음)
+
+--- default/crasher/crasher (previous logs) ---
+start
+```
+
+| 검증 항목 | 방법 | 결과 |
+|---|---|---|
+| 이미지 빌드/배포 | main push → Actions `test` → `image` 성공, 노드에서 `crictl pull ghcr.io/...` | ✅ |
+| CronJob 실행 | 수동 Job `Completed` (임계치 초과 exit 1 이어도 Job 성공 처리) | ✅ |
+| 클러스터 안 로그 조회 | kubectl 없이 ServiceAccount(`pods/log` get) + API 로 crasher 직전 로그 `start` 출력 | ✅ |
+| OOMKilled 로그 | oom-test 는 출력 없이 메모리 할당 중 종료 → `(로그 없음)` | ✅ |
+| 이력 저장 | hostPath `history.jsonl` 에 실행마다 1줄 (임계치 초과 없으면 `"containers": []`) | ✅ |
+| Slack 알림 | 임계치 초과 시 `#k8s-alerts` 채널에 표 + 요약 수신, 초과 없으면 미발송 | ✅ |
+| 삭제된 Pod 종료 사유 | Pod 삭제 후 실행 → `-` 대신 `Error` (`last_over_time` 대체) | ✅ |
+| 삭제된 Pod 로그 | `(Pod 가 이미 삭제되어 로그를 볼 수 없음)` 표시 | ✅ |
 
 - 단위 테스트: `pytest -q` (GitHub Actions 에서 push 마다 실행)
 - 전체 출력: [`sample_output.txt`](sample_output.txt)
