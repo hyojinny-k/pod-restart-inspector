@@ -76,8 +76,9 @@ spec:
             - name: inspector
               image: ghcr.io/hyojinny-k/pod-restart-inspector:latest
               imagePullPolicy: Always # latest 태그라 매 실행마다 최신 이미지 확인
-              # 종료 코드 1(임계치 초과)은 정상 결과이므로 Job 을 실패로 표시하지 않고, 2(조회 실패)만 실패로 둔다
-              command: ["sh", "-c", 'python main.py "$@"; rc=$?; [ "$rc" -eq 2 ] && exit 2; exit 0', "inspector"]
+              # 0(정상)·1(임계치 초과)은 도구가 제대로 동작한 결과라 Job 성공으로 두고,
+              # 그 외(2 조회 실패, 3 예상 못 한 오류, 시그널 종료 등)는 그 코드 그대로 Job 실패로 남긴다
+              command: ["sh", "-c", 'python main.py "$@"; rc=$?; [ "$rc" -le 1 ] && exit 0; exit "$rc"', "inspector"]
               args:
                 - --prometheus=http://kps-kube-prometheus-stack-prometheus.monitoring.svc:9090
                 - --window=30m

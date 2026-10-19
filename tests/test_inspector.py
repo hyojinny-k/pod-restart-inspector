@@ -1,5 +1,10 @@
+import ast
+import http.client
 import io
 import json
+import os
+import shutil
+import subprocess
 import sys
 from pathlib import Path
 
@@ -259,3 +264,80 @@ def test_previous_logs_deleted_pod_message(monkeypatch):
     monkeypatch.setattr(logs, "in_cluster", lambda: True)
     monkeypatch.setattr(logs, "_from_api", http_404)
     assert logs.previous_logs("default", "crasher", "crasher", 5) == "(Pod 가 이미 삭제되어 로그를 볼 수 없음)"
+
+
+# --- 종료 코드: 연결 끊김 / NaN / 예상 못 한 오류 -------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "exc",
+    [
+        ConnectionResetError("reset by peer"),
+        http.client.RemoteDisconnected("Remote end closed connection without response"),
+        http.client.IncompleteRead(b""),
+    ],
+)
+def test_connection_drop_exits_2(monkeypatch, capsys, exc):
+    def drop(url, q):
+        raise exc
+
+    monkeypatch.setattr(prom_api, "query", drop)
+    assert main.main([]) == 2
+    assert "[ERROR] Prometheus 조회 실패" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("value", ["NaN", "+Inf", "-Inf"])
+def test_non_finite_values_are_skipped(value):
+    rows = [{"metric": {"namespace": "d", "pod": "p", "container": "c"}, "value": [0, value]}] + RESTARTS
+    assert [c.pod for c in summarize(rows, REASONS, threshold=0)] == ["crasher", "oom-test", "nginx-1"]
+
+
+def test_unexpected_error_exits_3_not_1(fake_prom, monkeypatch, capsys):
+    def broken(*a):
+        raise KeyError("value")
+
+    monkeypatch.setattr(main, "summarize", broken)
+    assert main.main([]) == 3
+    err = capsys.readouterr().err
+    assert "KeyError" in err and "[ERROR] 예상하지 못한 오류" in err
+
+
+def test_bad_args_still_exit_2_via_argparse():
+    with pytest.raises(SystemExit) as e:
+        main.main(["--window", "1 hour"])
+    assert e.value.code == 2
+
+
+def test_logs_connection_drop_is_not_fatal(monkeypatch):
+    def drop(*a):
+        raise http.client.IncompleteRead(b"")
+
+    monkeypatch.setattr(logs, "in_cluster", lambda: True)
+    monkeypatch.setattr(logs, "_from_api", drop)
+    assert logs.previous_logs("d", "p", "c", 5).startswith("(로그 조회 실패")
+
+
+def test_slack_connection_drop_warns_and_keeps_exit_1(fake_prom, monkeypatch, capsys):
+    def drop(url, text):
+        raise http.client.IncompleteRead(b"")
+
+    monkeypatch.setattr(notify, "send_slack", drop)
+    assert main.main(["--threshold", "3", "--slack-webhook", "https://hooks.example/x"]) == 1
+    assert "[WARN] Slack 알림 전송 실패" in capsys.readouterr().err
+
+
+def _cronjob_wrapper() -> str:
+    text = (Path(__file__).resolve().parent.parent / "deploy" / "cronjob.yaml").read_text(encoding="utf-8")
+    line = next(ln for ln in text.splitlines() if ln.strip().startswith("command:") and "python main.py" in ln)
+    return ast.literal_eval(line.split("command:", 1)[1].strip())[2]
+
+
+@pytest.mark.skipif(os.name == "nt" or shutil.which("sh") is None, reason="POSIX sh 필요 (CI 에서 실행)")
+@pytest.mark.parametrize("rc, job_rc", [(0, 0), (1, 0), (2, 2), (3, 3), (137, 137)])
+def test_cronjob_wrapper_fails_job_only_on_errors(tmp_path, rc, job_rc):
+    fake_python = tmp_path / "python"
+    fake_python.write_text(f"#!/bin/sh\nexit {rc}\n")
+    fake_python.chmod(0o755)
+    env = {**os.environ, "PATH": f"{tmp_path}{os.pathsep}{os.environ['PATH']}"}
+    r = subprocess.run(["sh", "-c", _cronjob_wrapper(), "inspector", "--window=30m"], env=env, check=False)
+    assert r.returncode == job_rc

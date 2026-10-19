@@ -32,7 +32,7 @@ OpsRamp로 K8s 클러스터를 관측하면서, 반복적으로 죽는 컨테이
 
 **운영**
 - `--slack-webhook URL` (또는 `SLACK_WEBHOOK_URL`): 임계치 초과 시에만 Slack 알림
-- 종료 코드 `0` 정상 · `1` 임계치 초과 · `2` 조회 실패 또는 잘못된 인자 → cron / CI 알림 조건으로 사용
+- 종료 코드 `0` 정상 · `1` 임계치 초과 · `2` 조회 실패(연결 거부·끊김·타임아웃·잘못된 응답) 또는 잘못된 인자 · `3` 예상하지 못한 오류 → cron / CI 알림 조건으로 사용
 - 입력값 검증(`--window`, `--namespace`, `--exclude-ns`), 저장·알림 실패는 경고만 하고 종료 코드 유지
 - main push → 테스트 → 이미지 빌드 → GHCR → CronJob 이 최신 이미지로 실행
 
@@ -93,7 +93,7 @@ cat /var/lib/pod-restart-inspector/history.jsonl   # control-plane 노드
 | 주기 | `*/30 * * * *`, `--window=30m` | 실행 간격과 조회 기간을 맞춰 빈틈·중복 없이 확인 |
 | 권한 | ServiceAccount + ClusterRole `pods/log` get 만 | 로그 읽기에 필요한 최소 권한 |
 | 이미지 | `latest` + `imagePullPolicy: Always` | push 하면 다음 실행부터 자동 반영 |
-| 종료 코드 | 1(임계치 초과)은 Job 성공, 2(조회 실패)만 실패 | "알릴 게 있음"과 "도구 고장"을 구분 |
+| 종료 코드 | 0·1 은 Job 성공, 그 외(2 조회 실패, 3 예상 못 한 오류, 시그널 종료)는 Job 실패 | "알릴 게 있음"과 "도구 고장"을 구분 |
 | 재시도 | `backoffLimit: 0`, `concurrencyPolicy: Forbid` | 재시도·중복 실행으로 Slack 알림이 반복되지 않게 |
 | 이력 | control-plane hostPath `/var/lib/pod-restart-inspector` | 별도 스토리지 없이 한 곳에 누적 (시간은 UTC) |
 | 보안 | non-root(10001), read-only rootfs, privilege escalation 금지 | |
@@ -157,13 +157,16 @@ start
 | Slack 알림 | 임계치 초과 시 채널에 표 + 요약 수신 (CLI 실행으로 확인), 초과 없으면 미발송 | ✅ |
 | 삭제된 Pod 로그 | `(Pod 가 이미 삭제되어 로그를 볼 수 없음)` | ✅ |
 
-- 단위 테스트 38개 (`pytest -q`) + `ruff check`, GitHub Actions 에서 push / PR 마다 실행
+- 단위 테스트 48개 (+ CronJob 종료 코드 래퍼 테스트 5개, Linux CI 에서 실행) (`pytest -q`) + `ruff check`, GitHub Actions 에서 push / PR 마다 실행
 - 전체 출력: [`sample_output.txt`](sample_output.txt)
 
 ## Design Notes
 - **누적 카운터 대신 `increase()`**: 오래전에 많이 죽은 Pod 가 상위에 뜨는 문제 방지
 - **삭제된 Pod 의 종료 사유**: 재시작 횟수는 기간 내 이력으로 계산되는데 종료 사유를 현재 값으로만 조회하면, 장애 후 Pod 가 삭제됐을 때 `-` 로 나옴
   → `(현재 사유) or on(namespace, pod, container) last_over_time(사유[window])` 로 현재 값이 없을 때만 기간 내 마지막 값을 사용
+- **종료 코드 1 을 "임계치 초과" 전용으로**: 파이썬은 처리 못 한 예외도 1 로 끝나서, 크래시가 "알림 대상 있음"으로 보이고
+  CronJob 에서는 성공으로 처리될 수 있었음 → 최상위에서 예외를 잡아 `3` 으로 구분, 응답 도중 연결 끊김(`ConnectionResetError`,
+  `IncompleteRead`)도 조회 실패 `2` 로 처리, 메트릭 값 `NaN`/`Inf` 는 건너뜀. CronJob 래퍼는 0·1 만 성공으로 본다
 - **반올림**: `increase()` 는 외삽 때문에 `2.9998` 같은 소수가 나옴. Python `round()` 는 2.5 → 2 라서 사사오입 사용
 - **의존성 0**: urllib / json / subprocess 만 사용 → 노드에 pip 설치 없이 실행, 이미지도 작게 유지
 - **클러스터 안/밖 로그 조회 분리**: 밖에서는 kubectl, 안에서는 ServiceAccount 토큰으로 API 호출 → 이미지에 kubectl 불필요

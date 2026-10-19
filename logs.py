@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import http.client
 import os
 import ssl
 import subprocess
@@ -25,7 +26,7 @@ def previous_logs(namespace: str, pod: str, container: str, tail: int, timeout: 
     try:
         fetch = _from_api if in_cluster() else _from_kubectl
         text = fetch(namespace, pod, container, tail, timeout)
-    except (OSError, subprocess.SubprocessError, RuntimeError) as e:
+    except (OSError, http.client.HTTPException, subprocess.SubprocessError, RuntimeError) as e:
         if _pod_not_found(e):
             return "(Pod 가 이미 삭제되어 로그를 볼 수 없음)"
         return f"(로그 조회 실패: {e})"

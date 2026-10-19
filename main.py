@@ -3,7 +3,8 @@
 종료 코드
     0  임계치 이상 재시작한 컨테이너 없음
     1  임계치 이상 재시작한 컨테이너 있음 (cron / CI 알림 조건으로 사용)
-    2  Prometheus 조회 실패 또는 잘못된 인자
+    2  Prometheus 조회 실패(연결 거부·끊김·타임아웃·잘못된 응답) 또는 잘못된 인자
+    3  예상하지 못한 오류 (임계치 초과 1 과 구분하기 위해 별도 코드)
 
 결과 저장(--save), Slack 알림(--slack-webhook) 실패는 경고만 출력하고 종료 코드는 바꾸지 않는다.
 """
@@ -11,10 +12,11 @@
 from __future__ import annotations
 
 import argparse
+import http.client
 import os
 import re
 import sys
-import urllib.error
+import traceback
 
 import history
 import logs
@@ -78,6 +80,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 
 def main(argv: list[str] | None = None) -> int:
+    try:
+        return run(argv)
+    except Exception:  # noqa: BLE001 — 처리 못 한 예외가 파이썬 기본 종료 코드 1(= 임계치 초과)로 끝나지 않게 한다
+        traceback.print_exc()
+        print("[ERROR] 예상하지 못한 오류로 중단했습니다.", file=sys.stderr)
+        return 3
+
+
+def run(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     restarts_q, reason_q = prom_api.build_queries(args.window, args.namespace, args.exclude_ns)
 
@@ -87,7 +98,9 @@ def main(argv: list[str] | None = None) -> int:
             prom_api.query(args.prometheus, reason_q),
             args.threshold,
         )
-    except (urllib.error.URLError, RuntimeError, TimeoutError) as e:
+    # OSError: URLError, TimeoutError, ConnectionResetError(RemoteDisconnected 포함)
+    # HTTPException: 응답을 읽다 끊긴 경우(IncompleteRead) 등
+    except (OSError, http.client.HTTPException, RuntimeError) as e:
         print(f"[ERROR] Prometheus 조회 실패 ({args.prometheus}): {e}", file=sys.stderr)
         return 2
 
@@ -106,7 +119,7 @@ def main(argv: list[str] | None = None) -> int:
     if items and args.slack_webhook:
         try:
             notify.send_slack(args.slack_webhook, slack_text(items, args.window, args.threshold))
-        except (OSError, ValueError) as e:  # webhook URL 은 비밀값이므로 메시지에 넣지 않는다
+        except (OSError, http.client.HTTPException, ValueError) as e:  # webhook URL 은 비밀값이므로 메시지에 넣지 않는다
             print(f"[WARN] Slack 알림 전송 실패: {e}", file=sys.stderr)
 
     return 1 if items else 0
