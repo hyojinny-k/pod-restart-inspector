@@ -1,2 +1,2 @@
-# 런타임 의존성 없음 (Python 3.10+ 표준 라이브러리만 사용)
+# 런타임 의존성 없음 (--logs 는 클러스터 밖에서 kubectl 사용) (Python 3.10+ 표준 라이브러리만 사용)
 # 개발/테스트용: pip install pytest ruff

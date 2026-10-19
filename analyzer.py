@@ -13,6 +13,7 @@ class ContainerRestart:
     container: str
     restarts: int
     last_reason: str  # OOMKilled, Error, Completed ... 정보가 없으면 "-"
+    previous_logs: str | None = None  # --logs 지정 시 재시작 직전 로그
 
 
 def _key(metric: dict) -> tuple[str, str, str]:

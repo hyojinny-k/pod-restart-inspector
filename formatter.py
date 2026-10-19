@@ -46,6 +46,25 @@ def to_markdown(items: list[ContainerRestart]) -> str:
     return "\n".join(lines)
 
 
+def logs_section(items: list[ContainerRestart], markdown: bool = False) -> list[str]:
+    lines = []
+    for c in items:
+        if c.previous_logs is None:
+            continue
+        title = f"{c.namespace}/{c.pod}/{c.container} (previous logs)"
+        if markdown:
+            lines += ["", f"#### {title}", "```", c.previous_logs, "```"]
+        else:
+            lines += ["", f"--- {title} ---", c.previous_logs]
+    return lines
+
+
+def slack_text(items: list[ContainerRestart], window: str, threshold: int) -> str:
+    """Slack 메시지 본문. 로그는 길어질 수 있어 넣지 않는다."""
+    summary = summary_lines(items, window, threshold)
+    return "\n".join([":rotating_light: *Pod restart alert*", "```", to_table(items), "```", *summary[1:]])
+
+
 def render(items: list[ContainerRestart], fmt: str, window: str, threshold: int) -> str:
     if fmt == "json":
         return json.dumps(
@@ -57,7 +76,8 @@ def render(items: list[ContainerRestart], fmt: str, window: str, threshold: int)
     summary = summary_lines(items, window, threshold)
     if fmt == "markdown":
         body = to_markdown(items) if items else ""
-        return "\n".join([f"### Pod restart report (window={window})", "", body, "", *summary]).strip()
+        lines = [f"### Pod restart report (window={window})", "", body, "", *summary]
+        return "\n".join(lines + logs_section(items, markdown=True)).strip()
 
     body = to_table(items) if items else ""
-    return "\n".join([body, "", *summary]).strip()
+    return "\n".join([body, "", *summary, *logs_section(items)]).strip()

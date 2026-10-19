@@ -1,0 +1,109 @@
+# pod-restart-inspector 를 30분마다 실행하는 CronJob
+#
+# 사전 준비 (README "CronJob 으로 실행" 참고)
+#   1) 이미지 pod-restart-inspector:0.2.0 을 노드의 containerd 에 import
+#   2) Slack 알림을 쓰려면 Secret 생성:
+#      kubectl -n pod-restart-inspector create secret generic slack-webhook --from-literal=url='https://hooks.slack.com/services/...'
+#
+# 결과 이력은 control-plane 노드의 /var/lib/pod-restart-inspector/history.jsonl 에 쌓인다.
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: pod-restart-inspector
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: pod-restart-inspector
+  namespace: pod-restart-inspector
+---
+# --logs 로 재시작 직전 로그를 읽기 위한 최소 권한 (pods/log 읽기만)
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: pod-restart-inspector
+rules:
+  - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: pod-restart-inspector
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: pod-restart-inspector
+subjects:
+  - kind: ServiceAccount
+    name: pod-restart-inspector
+    namespace: pod-restart-inspector
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: pod-restart-inspector
+  namespace: pod-restart-inspector
+spec:
+  schedule: "*/30 * * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 0 # 재시도하면 Slack 알림이 중복되므로 재시도하지 않음
+      template:
+        spec:
+          serviceAccountName: pod-restart-inspector
+          restartPolicy: Never
+          # 이력 파일을 한 곳에 모으기 위해 control-plane 노드에서 실행
+          nodeSelector:
+            node-role.kubernetes.io/control-plane: ""
+          tolerations:
+            - key: node-role.kubernetes.io/control-plane
+              effect: NoSchedule
+          initContainers:
+            # hostPath 디렉터리는 root 소유로 만들어지므로 실행 사용자(10001)에게 쓰기 권한 부여
+            - name: fix-permission
+              image: busybox:1.36
+              command: ["sh", "-c", "chown 10001 /data"]
+              volumeMounts:
+                - name: data
+                  mountPath: /data
+          containers:
+            - name: inspector
+              image: pod-restart-inspector:0.2.0
+              imagePullPolicy: IfNotPresent
+              # 종료 코드 1(임계치 초과)은 정상 결과이므로 Job 을 실패로 표시하지 않고, 2(조회 실패)만 실패로 둔다
+              command: ["sh", "-c", 'python main.py "$@"; rc=$?; [ "$rc" -eq 2 ] && exit 2; exit 0', "inspector"]
+              args:
+                - --prometheus=http://kps-kube-prometheus-stack-prometheus.monitoring.svc:9090
+                - --window=30m
+                - --threshold=3
+                - --logs=20
+                - --save=/data/history.jsonl
+              env:
+                - name: SLACK_WEBHOOK_URL
+                  valueFrom:
+                    secretKeyRef:
+                      name: slack-webhook
+                      key: url
+                      optional: true # Secret 이 없으면 알림 없이 실행
+              securityContext:
+                runAsNonRoot: true
+                runAsUser: 10001
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+              resources:
+                requests: { cpu: 10m, memory: 32Mi }
+                limits: { memory: 64Mi }
+              volumeMounts:
+                - name: data
+                  mountPath: /data
+          volumes:
+            - name: data
+              hostPath:
+                path: /var/lib/pod-restart-inspector
+                type: DirectoryOrCreate
