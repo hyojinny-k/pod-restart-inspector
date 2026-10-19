@@ -1,0 +1,10 @@
+$ python3 main.py --window 30m --threshold 2
+NAMESPACE  POD       CONTAINER  RESTARTS  LAST_REASON
+default    oom-test  app        4         OOMKilled
+default    crasher   crasher    3         Error
+
+[Summary] window=30m, threshold=2
+2 container(s) exceeded restart threshold.
+Highest: default/oom-test/app = 4 (last reason: OOMKilled)
+OOMKilled: 1 container(s) -> memory limit 확인 필요
+exit=1
