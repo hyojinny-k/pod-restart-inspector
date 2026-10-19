@@ -6,18 +6,10 @@ Prometheus 에서 Kubernetes 컨테이너 재시작 메트릭을 조회해
 **최근 N분/시간 동안 재시작이 잦은 컨테이너**를 종료 사유(OOMKilled / Error), 재시작 직전 로그와 함께 요약하고
 Slack 으로 알리는 도구입니다. CLI 로 바로 쓰거나, 컨테이너 이미지로 만들어 클러스터 안의 CronJob 으로 주기 실행합니다.
 
-```mermaid
-flowchart LR
-  A[git push] --> B[GitHub Actions<br/>ruff · pytest]
-  B -->|main 통과 시| C[docker build]
-  C --> D[(GHCR<br/>latest · sha-커밋)]
-  D -->|30분마다 pull| E[K8s CronJob]
-  P[(Prometheus<br/>kube-state-metrics)] -->|PromQL| E
-  K[Kubernetes API<br/>pods/log] -->|직전 로그| E
-  E --> F[Job 로그<br/>표 + Summary]
-  E --> G[history.jsonl<br/>이력 누적]
-  E -->|임계치 초과| H[Slack 알림]
-```
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/architecture-dark.png">
+  <img src="docs/architecture-light.png" alt="Architecture: git push → GitHub Actions (ruff · pytest) → docker build → GHCR → 30분마다 K8s CronJob 실행 (Prometheus PromQL + Kubernetes API pods/log) → Job 로그, history.jsonl, 임계치 초과 시 Slack 알림">
+</picture>
 
 **Stack**: Python 3.12 (표준 라이브러리만) · PromQL · GitHub Actions · GHCR · Kubernetes CronJob / RBAC · Slack Webhook
 
@@ -198,6 +190,7 @@ tests/             단위 테스트 (pytest)
 Dockerfile         python:3.12-alpine, non-root
 deploy/            CronJob, ServiceAccount, RBAC
 examples/          장애 재현용 Pod (crasher, oom-test)
+docs/              아키텍처 다이어그램 (라이트/다크, PNG + SVG 원본)
 .github/workflows/ CI (ruff, pytest) + GHCR 이미지 빌드
 ```
 
