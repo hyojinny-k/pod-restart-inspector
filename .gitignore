@@ -4,3 +4,7 @@ __pycache__/
 .pytest_cache/
 .ruff_cache/
 report.md
+
+# 실행 결과 (--save) / 백업 파일
+history.jsonl
+*.bak
