@@ -22,7 +22,7 @@ OpsRamp로 K8s 클러스터를 관측하면서, 반복적으로 죽는 컨테이
 - `--logs N`: 임계치 초과 컨테이너의 **재시작 직전 로그**(`kubectl logs --previous`) 마지막 N줄 함께 출력
 - `--save FILE`: 실행 결과를 JSON Lines 로 **누적 저장** → Pod 가 삭제돼 메트릭이 사라져도 이력 보존
 - `--slack-webhook URL` (또는 `SLACK_WEBHOOK_URL`): 임계치 초과 시 **Slack 알림**
-- 컨테이너 이미지(`Dockerfile`) + Kubernetes **CronJob**(`deploy/cronjob.yaml`)으로 주기 실행
+- 컨테이너 이미지(`Dockerfile`, GitHub Actions → GHCR 자동 빌드) + Kubernetes **CronJob**(`deploy/cronjob.yaml`)으로 주기 실행
 
 ## Example
 실제 클러스터에서 `examples/crash-pods.yaml` 로 장애를 재현한 뒤 실행한 결과입니다.
@@ -67,11 +67,13 @@ python3 main.py --window 30m --threshold 2 --logs 20 --save history.jsonl
 `/var/lib/pod-restart-inspector/history.jsonl` 에 쌓입니다. 클러스터 안에서는 kubectl 대신
 ServiceAccount 토큰으로 Kubernetes API 를 직접 호출해 로그를 읽습니다 (`pods/log` get 권한만 부여).
 
+이미지는 GitHub Actions 가 테스트 통과 후 main push 마다 빌드해
+`ghcr.io/hyojinny-k/pod-restart-inspector` 에 올립니다 (`latest`, `sha-<커밋>` 태그).
+노드에 docker 나 빌드 도구를 설치할 필요가 없습니다.
+
 ```bash
-# 1) 이미지 빌드 후 control-plane 노드의 containerd 로 가져오기 (레지스트리 없이 사용하는 경우)
-docker build -t pod-restart-inspector:0.2.0 .
-docker save pod-restart-inspector:0.2.0 -o pri.tar
-sudo ctr -n k8s.io images import pri.tar
+# 1) 이미지 받아지는지 확인 (노드에서)
+sudo crictl pull ghcr.io/hyojinny-k/pod-restart-inspector:latest
 
 # 2) 배포 (+ Slack 을 쓰는 경우 Secret 생성)
 kubectl apply -f deploy/cronjob.yaml
